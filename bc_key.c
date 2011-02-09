@@ -12,6 +12,8 @@
 #include <openssl/ripemd.h>
 #include <openssl/evp.h>
 
+DB *wallet;
+
 DB *open_wallet(char *path){
 
     DB *dbp;
@@ -154,7 +156,8 @@ addr_encode(unsigned char hash160[25])
 	return addr + (i?(i-1):0);
 }
 
-char *public_key_to_bc_address(char *key, int length){
+char *public_key_to_bc_address(char *key, int length)
+{
     char *digest1=sha256(key,length);
     char *digest2=ripemd160(digest1,SHA256_DIGEST_LENGTH);
     size_t result_size;
@@ -176,7 +179,26 @@ char *public_key_to_bc_address(char *key, int length){
     
 }
 
-void export_key(const unsigned char *key, int length){
+char *digest_to_bc_address(char *digest160)
+{
+    size_t result_size;
+    char *result;
+    char *b58;
+    char *checksum;
+    char *final=malloc(RIPEMD160_DIGEST_LENGTH+5); /* +1 byte for version, +4 bytes for checksum) */
+    final[0]=0x00; /* version 0 */
+    memcpy(final+1,digest160,RIPEMD160_DIGEST_LENGTH);
+    checksum=double_sha256(final,RIPEMD160_DIGEST_LENGTH+1);
+    memcpy(&final[RIPEMD160_DIGEST_LENGTH+1],checksum,4);
+    free(checksum);
+    b58=(char *) malloc(35);
+    memcpy(b58, addr_encode(final), 35);
+    free(final);
+    return b58;
+} 
+
+void export_key(const unsigned char *key, int length)
+{
     EC_KEY* pkey=EC_KEY_new();
     EC_GROUP *group = EC_GROUP_new_by_curve_name(NID_secp256k1);
     EC_GROUP_set_asn1_flag(group, OPENSSL_EC_NAMED_CURVE);
@@ -192,8 +214,126 @@ void export_key(const unsigned char *key, int length){
     PEM_write_bio_ECPrivateKey(out,pkey,NULL,NULL,0,NULL,NULL);
 }
 
+void foreach_item(DB *db, void func(DBT *, DBT *,void *), void *data)
+{
+    DBC *cursor;
+    DBT key, value;
+    int ret;
+    if ((ret = db->cursor(db, NULL, &cursor, 0)) != 0) {
+        db->err(db, ret, "DB->cursor");
+        exit(1);
+    }
+    memset(&key, 0, sizeof(key));
+    memset(&value, 0, sizeof(value));
+    while ((ret = cursor->get(cursor, &key, &value, DB_NEXT)) == 0){
+        func(&key,&value,data);
+    }
+    if (ret != DB_NOTFOUND) {
+        db->err(db, ret, "DBcursor->get");
+        exit(1);
+    }
+}
 
-void find_key(DBT *key, DBT *value, void *data){
+
+struct ismine {
+	int ismine;
+	char *address;
+};
+
+void ismine(DBT *key, DBT *value, void *data)
+{
+    struct ismine *ismine=(struct ismine *) data;
+    FILE *key_stream;
+    char *type;
+    char *b58;
+    char *public_key;
+    int public_key_length;
+
+    if (ismine->ismine)
+	    return;
+    key_stream=fmemopen(key->data,key->size,"r");
+    type=get_string(key_stream);
+    if(strcmp("key",type)==0)
+    {
+        public_key_length=get_size(key_stream);
+        public_key=(char *) malloc(public_key_length);
+        fread(public_key,1,public_key_length,key_stream);
+        b58=public_key_to_bc_address(public_key,public_key_length);
+        if(strcmp(b58,ismine->address)==0)
+		ismine->ismine = 1;
+	free(public_key);
+	free(b58);
+    }
+    free(type);
+    fclose(key_stream);
+}
+
+
+void parsetx(FILE *value_stream)
+{
+	long long value;
+	unsigned char buf32[32];
+	unsigned char buf1;
+	unsigned char *buf;
+	int len;
+	int cnt;
+	struct ismine mine;
+	struct tm *tm;
+	
+	fread(buf32, 1, 4, value_stream);
+        cnt=get_size(value_stream);
+	while(cnt--)
+	{
+		fread(buf32, 1, 32, value_stream);
+		fread(buf32, 1, 4, value_stream);
+		len=get_size(value_stream);
+		buf=malloc(len);
+		fread(buf, 1, len, value_stream);
+		free(buf);
+		fread(buf32, 1, 4, value_stream);
+	}
+        cnt=get_size(value_stream);
+	while(cnt--)
+	{
+		fread(&value, 1, 8, value_stream);
+		len=get_size(value_stream);
+		buf=malloc(len);
+		fread(buf, 1, len, value_stream);
+		mine.address=NULL;
+		mine.ismine=0;
+		if(len==25)
+			mine.address=digest_to_bc_address(buf+3);
+		else if (len==67)
+			mine.address=public_key_to_bc_address(buf+1, 65);
+		free(buf);
+		if(mine.address){
+	                foreach_item(wallet,ismine,&mine);
+			if(mine.ismine)
+				break;
+			free(mine.address);
+			mine.address=NULL;
+		}
+	}
+	printf("%4lld.%08lld %-35s", value/100000000ll, value%100000000ll,
+			mine.ismine?mine.address:"payment");
+	fseek(value_stream, 6, SEEK_END);
+	fread(buf32, 1, 4, value_stream);
+	tm=localtime((time_t*)buf32);
+	printf("%4d/%02d/%02d", tm->tm_year+1900, tm->tm_mon+1, tm->tm_mday);
+	fread(&buf1, 1, 1, value_stream);
+	if(buf1 && mine.ismine)
+		printf(" change");
+	fread(&buf1, 1, 1, value_stream);
+	if(buf1 || !mine.ismine)
+		printf(" spent");
+	if(mine.address)
+		free(mine.address);
+}
+		
+
+
+void find_key(DBT *key, DBT *value, void *data)
+{
     char *address=(char *) data;
     FILE *key_stream=fmemopen(key->data,key->size,"r");
     FILE *value_stream=fmemopen(value->data,value->size,"r");
@@ -201,12 +341,13 @@ void find_key(DBT *key, DBT *value, void *data){
     char *b58;
     char *public_key;
     int public_key_length;
-
     char *private_key;
     int private_key_length;
     int found_key=0;
+
     type=get_string(key_stream);
-    if(strcmp("key",type)==0){
+    if(strcmp("key",type)==0)
+    {
         public_key_length=get_size(key_stream);
         public_key=(char *) malloc(public_key_length);
         private_key_length=get_size(value_stream);
@@ -215,13 +356,16 @@ void find_key(DBT *key, DBT *value, void *data){
         fread(private_key,1,private_key_length,value_stream);
         found_key=1;
     }
-    if(found_key){
+    if(found_key)
+    {
         b58=public_key_to_bc_address(public_key,public_key_length);
-        if(strcmp(b58,address)==0){
+        if(strcmp(b58,address)==0)
+	{
             export_key(private_key,private_key_length);
             exit(0);
         }
-        if(strcmp("ALL",address)==0){
+        if(strcmp("ALL",address)==0)
+	{
 	    printf("%s\n", b58);
             export_key(private_key,private_key_length);
         }
@@ -234,7 +378,8 @@ void find_key(DBT *key, DBT *value, void *data){
     fclose(value_stream);
 }
 
-void display(DBT *key, DBT *value, void *data){
+void display(DBT *key, DBT *value, void *data)
+{
     char *address=(char *) data;
     FILE *key_stream=fmemopen(key->data,key->size,"r");
     FILE *value_stream=fmemopen(value->data,value->size,"r");
@@ -317,6 +462,15 @@ void display(DBT *key, DBT *value, void *data){
 	printf("%s %08x %4d/%02d/%02d %s\n", type, indx, tm->tm_year+1900, tm->tm_mon+1, tm->tm_mday, b58);
         free(public_key);
         free(b58);
+    } else if(strcmp("tx",type)==0){
+	unsigned char hash[32];
+	int c;
+	printf("%s ", type);
+	c = fread(hash, 1, 32, key_stream);
+	while(c--) printf("%02x", hash[c]);
+	printf(" ");
+	parsetx(value_stream);
+	printf("\n");
     } else {
 	int c;
 	printf("%s ", type);
@@ -329,26 +483,8 @@ void display(DBT *key, DBT *value, void *data){
     fclose(value_stream);
 }
 
-void foreach_item(DB *db, void func(DBT *, DBT *,void *), void *data){
-    DBC *cursor;
-    DBT key, value;
-    int ret;
-    if ((ret = db->cursor(db, NULL, &cursor, 0)) != 0) {
-        db->err(db, ret, "DB->cursor");
-        exit(1);
-    }
-    memset(&key, 0, sizeof(key));
-    memset(&value, 0, sizeof(value));
-    while ((ret = cursor->get(cursor, &key, &value, DB_NEXT)) == 0){
-        func(&key,&value,data);
-    }
-    if (ret != DB_NOTFOUND) {
-        db->err(db, ret, "DBcursor->get");
-        exit(1);
-    }
-}
-
-void print_usage(char *here){
+void print_usage(char *here)
+{
     printf("Usage:\n");
     printf("%s BITCOIN_ADDRESS /path/to/wallet.dat\n",here);
     printf("%s ANY /path/to/wallet.dat\n",here);
@@ -356,8 +492,8 @@ void print_usage(char *here){
     printf("%s 1qZGQG5Ls66oBbtLt3wPMa6zfq7CJ7f12 /home/dirtyfilthy/.bitcoin/wallet.dat\n",here);
 }
 
-int main(int argc, char *argv[]){
-    DB *wallet;
+int main(int argc, char *argv[])
+{
     ENGINE_load_builtin_engines();
     CRYPTO_malloc_init();
     if(argc!=3){
