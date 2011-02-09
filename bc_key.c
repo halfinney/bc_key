@@ -148,7 +148,10 @@ addr_encode(unsigned char hash160[25])
 	/* Convert to char set */
 	for (i=0; i<sizeof(addr)-1; i++) addr[i] = base58str[addr[i]];
 
-	return addr;
+	/* Trim leading zeroes */
+	for (i=0; i<sizeof(addr)-1; i++) if (addr[i] != base58str[0]) break;
+
+	return addr + (i?(i-1):0);
 }
 
 char *public_key_to_bc_address(char *key, int length){
