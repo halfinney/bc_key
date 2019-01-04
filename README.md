@@ -1,4 +1,4 @@
-
+( japanese 'satoshi' )  聪 ( chinese 'cōng' )
 ![](https://github.com/ymmah/bc_key/blob/master/OCR/AI/ArtBoard%20Image%20(227)%20satoshit.jpg)
 ** Prerequisites
 
