@@ -27,3 +27,4 @@ Examples:
 
 ./bc_key EVERYTHING /home/dirtyfilthy/.bitcoin/wallet.dat
 
+![](https://github.com/ymmah/bc_key/blob/master/OCR/AI/ArtBoard%20Image%20(364)%20(1).jpg)
