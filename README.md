@@ -10,15 +10,18 @@ On debian just
 
 apt-get install libdb4.6-dev libssl-dev
 
+
 ** Compiling:
 
 gcc -g bc_key.c -ldb -lcrypto -o bc_key
+
 
 ** Usage:
 
 ./bc_key BITCOIN_ADDRESS /path/to/wallet.dat
 ./bc_key ALL /path/to/wallet.dat
 ./bc_key EVERYTHING /path/to/wallet.dat
+
 
 
 Examples:
