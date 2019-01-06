@@ -1,6 +1,7 @@
 
 ![](https://github.com/ymmah/bc_key/blob/master/OCR/AI/ArtBoard%20Image%20(228).jpg)
 
+intelligent, clever, bright
 
 ** Prerequisites
 
