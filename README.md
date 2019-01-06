@@ -1,12 +1,5 @@
 ![](https://github.com/ymmah/bc_key/blob/master/OCR/AI/ArtBoard%20Image%20(228).jpg)
 
-帝
-上帝
-你上帝
-切你上帝
-一切你上帝
-晃一切你上帝
-搖晃一切你上帝
 
 ** Prerequisites
 
